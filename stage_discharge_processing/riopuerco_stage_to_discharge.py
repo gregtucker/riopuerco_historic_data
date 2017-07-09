@@ -10,9 +10,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 
+
 dh = 0.005  # stage adjustment increment, feet
-hydrograph_filename = 'rp_stage_time410501.csv'   # stage vs time, in ft and decimal days
-qm = 414.0  # mean daily Q for this day, in cfs
+verbose = False
+plot_results = False
+
 
 def calc_mean_daily_discharge(t, q):
     """
@@ -109,21 +111,145 @@ def read_hydrograph_data(filename):
     return hydro_data[:,0], hydro_data[:,1], rt_filenames
 
 
-def run(data_file_name):
-    """Run the full analysis.
+def read_mean_daily_discharge(filename):
+    """Read the USGS-estimated daily mean discharge values from a csv file.
     
+    Assumes there is one column with decimal date/time, another with discharge
+    or blank for dry.
+    """
+    import csv
+    
+    daily_mean_data = {}
+    
+    with open(filename, 'r') as csvfile:
+        myreader = csv.reader(csvfile, delimiter=',')
+        for row in myreader:
+            if row[1] == '':
+                val = 0.0
+            else:
+                try:
+                    val = float(row[1])
+                except:
+                    val = 0.0
+                    if verbose:
+                        print(row[0], row[1])
+            daily_mean_data[int(row[0])] = val
+            
+    return daily_mean_data
+
+
+def display_days_data(datetime, stage, discharge):
+    """Prints out the values for the day, for testing purposes."""
+    for i in range(len(datetime)):
+        print(str(datetime[i]) + ' ' + str(stage[i]) + ' ' + str(discharge[i]))
+        print discharge[i]
+
+
+def process_one_day_of_stage_records(datetime, gage_height, rt_gage_height,
+                                     rt_discharge, usgs_mean_disch):
+    """Calculate discharge from stage records for one day.
+    
+    Parameters
+    ----------
+    datetime : array of float
+        List of numbers representing date and time for each record of the
+        current day.
+    gage_height : array of float
+        List of gage height measurements, in feet (same length as datetime)
+    rt_gage_height : array of float
+        Gage heights in rating table
+    rt_discharge : array of float
+        Discharge values in rating table
+    usgs_mean_disch : float
+        Daily mean discharge for this day originally calculated by USGS
+    """
+
+    # Get the discharge corresponding to each stage measurement of the day,
+    # by interpolating the rating table.
+    q = np.interp(gage_height, rt_gage_height, rt_discharge)
+
+    # Calculate the mean daily discharge that this discharge series represents
+    qm_pred0 = calc_mean_daily_discharge(datetime, q)
+
+    # Find the difference between this value and the original USGS value
+    q_err0 = (usgs_mean_disch - qm_pred0) / usgs_mean_disch
+
+    # If the error is less than 5%, we're good to go. More likely, however,
+    # it will be off, so we will iterate on adjusting the stage shift until we
+    # find a better match. This is a simple stepping algorith in which we
+    # increase or decrease the stage measurements until the sign of the error
+    # reverses, meaning we've crossed a minimum point.
+    niter = 0
+    h_adj = 0.0
+    prev_q_err = q_err0
+    best_adj = 0.0
+    best_qm = qm_pred0
+    best_abs_q_err = abs(q_err0)
+    dir_adj = np.sign(q_err0)
+    q_err = q_err0
+    while abs(q_err)<=abs(prev_q_err) and niter<100:
+        h_adj += dir_adj*dh
+        q = np.interp(gage_height+h_adj, rt_gage_height, rt_discharge)
+        qm_pred = calc_mean_daily_discharge(datetime, q)
+        prev_q_err = q_err
+        q_err = (usgs_mean_disch - qm_pred) / usgs_mean_disch
+        if verbose:
+            print 'adjustment =',h_adj,'  qm_pred =',qm_pred,'  q_err =',q_err
+        if abs(q_err) < best_abs_q_err:
+            best_qm = qm_pred
+            best_abs_q_err = abs(q_err)
+            best_adj = h_adj
+        niter += 1
+    
+    # Since we probably overshot the best-fit, go back and interpolate again
+    # with our best-fit adjustment.
+    q = np.interp(gage_height + best_adj, rt_gage_height, rt_discharge)
+
+    return q, best_qm, best_adj, best_abs_q_err
+
+
+def write_revised_records_to_file(date_time_master, stage_master_original,
+                                  stage_master_revised, discharge_master,
+                                  mean_daily_discharge_master, filename):
+    """Write the 3 quantities to a csv file."""
+    with open(filename, 'w') as output_file:
+        output_file.write('Date/time,Original gage height (ft),'
+                          + 'Adjusted gage height (ft),'
+                          + 'Discharge (cfs),'
+                          + 'Calculated mean daily discharge (cfs)')
+        for i in range(len(date_time_master)):
+            output_file.write(str(date_time_master[i]) + ','
+                              + str(stage_master_original[i]) + ','
+                              + str(stage_master_revised[i]) + ','
+                              + str(discharge_master[i]) + ','
+                              + str(mean_daily_discharge_master[i]))
+    output_file.close()
+    
+
+def run(data_file_name, daily_mean_file_name, rating_table_dir):
+    """Run the full analysis.
     """
     
     # Read the data
     (date_time, stage, rt_filename) = read_hydrograph_data(data_file_name)
+    
+    # Read the daily mean discharge values
+    mean_daily_discharge = read_mean_daily_discharge(daily_mean_file_name)
 
     # Initialize the search through the records
     first_rec_of_day = 0
-    current_rec = 1
+    current_rec = 0
 
     # Create lists to hold today's date/time and stage records
     date_time_this_day = []
     stage_this_day = []
+
+    # Create lists to hold all date/time and stage records
+    date_time_master = []
+    stage_master_original = []
+    stage_master_revised = []
+    discharge_master = []
+    mean_daily_discharge_master = []
 
     # If the first record isn't right at midnight, add a record for midnight,
     # assigning the same stage as the first record.
@@ -131,19 +257,20 @@ def run(data_file_name):
         day_start = math.floor(date_time[0])
         date_time_this_day.append(day_start)
         stage_this_day.append(stage[0])
-        current_rec = 0  # back up one
+        #current_rec = 0  # back up one
 
     while current_rec < len(date_time):
-        
+
         # Get today's day number
         this_day = math.floor(date_time[first_rec_of_day])
-        print('this_day' + str(this_day))
+        if verbose:
+            print('this_day ' + str(this_day))
         
         # Loop over successive records until we find one that falls on the next
         # day, or we hit the end of the records
         while (current_rec < len(date_time)
                and math.floor(date_time[current_rec]) == this_day):
-        
+
             # Add the current record to this day
             date_time_this_day.append(date_time[current_rec])
             stage_this_day.append(stage[current_rec])
@@ -151,52 +278,113 @@ def run(data_file_name):
             # Advance the record
             current_rec += 1
 
+        # Now, add a record for midnight between this day and the next... but
+        # only if (a) no such midnight already exists, and (b) we're not at
+        # the end of the file.
+        if verbose:
+            print(current_rec < len(date_time))
+            if current_rec < len(date_time):
+                print(date_time[current_rec])
+                print(date_time[current_rec] % 1)
+        if current_rec < len(date_time):
+            if date_time[current_rec] % 1 != 0.0:
+            
+                # Interpolate stage between previous and next records
+                dt0 = date_time[current_rec - 1]
+                st0 = stage[current_rec - 1]
+                dt1 = date_time[current_rec]
+                st1 = stage[current_rec]
+                midnight = math.floor(date_time[current_rec])
+                m = (st1 - st0) / (dt1 - dt0)
+                x = midnight - dt0
+                stage_midnight = m * x + st0
+                add_midnight_to_next = True
+
+            else:
+                midnight = date_time[current_rec]
+                stage_midnight = stage[current_rec]
+                add_midnight_to_next = False
+
+            date_time_this_day.append(midnight)
+            stage_this_day.append(stage_midnight)
+            
+        else:  # this means we're at the end of the file
+            
+            add_midnight_to_next = False  # so we won't have a next day
+            if date_time[current_rec - 1] % 1 != 0.0:  # if last rec not midnight,
+                date_time_this_day.append(this_day + 1.0)  # add midnight
+                stage_this_day.append(stage[current_rec - 1])
+                
+        # TODO:
+        # 2. figure out why the discharge values are all even integers, not
+        # fractional
+                
+        # Process this particular day
+
+        # Get the name of the rating table file for this day
+        (rt_gage_height, rt_discharge) = read_rating_table(rating_table_dir
+            + '/' + rt_filename[first_rec_of_day])
+        
+        if verbose:
+            print('About to process... day is:' + str(int(this_day)))
+            print('mdd is' + str(mean_daily_discharge[int(this_day)]))
+        if mean_daily_discharge[int(this_day)] == 0.0:
+            q = []
+            for i in range(len(date_time_this_day)):
+                q.append(0.0)
+            bqm = 0.0
+            best_adj = 0.0
+        else:
+            # Process the day's stage records
+            (q, bqm, best_adj, best_abs_q_err) = process_one_day_of_stage_records(
+                    np.array(date_time_this_day), np.array(stage_this_day),
+                    rt_gage_height, rt_discharge,
+                    mean_daily_discharge[int(this_day)])
+
+        # Add the data to the master lists
+        for i in range(len(date_time_this_day)):
+            date_time_master.append(date_time_this_day[i])
+            stage_master_original.append(stage_this_day[i])
+            stage_master_revised.append(stage_this_day[i] + best_adj)
+            discharge_master.append(q[i])
+            mean_daily_discharge_master.append(bqm)
+
+        if verbose:
+            print('Finished a day:')
+            display_days_data(date_time_this_day, stage_this_day, q)
+        if plot_results:
+            plt.figure(1)
+            plt.plot(date_time_this_day, stage_this_day)
+            plt.ylabel('Stage (ft)')
+            plt.figure(2)
+            plt.plot(date_time_this_day, q)
+            plt.ylabel('Discharge (cfs)')
+            mdd = mean_daily_discharge[int(this_day)]
+            plt.plot([this_day, this_day + 1], [mdd, mdd])
+            plt.draw()
+
+        # Reset for the next
         first_rec_of_day = current_rec
-        print('Finished a day:')
-        print(date_time_this_day)
-        print(stage_this_day)
         date_time_this_day = []
         stage_this_day = []
+        if add_midnight_to_next:
+            date_time_this_day.append(midnight)
+            stage_this_day.append(stage_midnight)
 
-        # SOME THINGS TO DO: IF FIRST REC OF NEW DAY IS MIDNIGHT, ADD IT, IF
-        # NOT INTERPOLATE A MIDNIGHT
-
-        # Now we've either hit the next day or the end of the file.
-        
-    
-        # Is this midnight? If not, make a record for midnight
-        #if date_time[first_reco_of_day] % 1 != 0.0:
-            
-            # Date-time of beginning of day (technically midnight prior day)
-            #day_start = math.floor(date_time[first_rec_of_day])
-            #date_time_this_day.append(day_start)
-            
-            # Interpolate to get stage...
-            #  If this is the first record, set equal to first real record.
-            #  Else, interpolate linearly between prior day and this one.
-#            if first_rec_of_day == 0:
-#                stage_this_day.append(stage[first_rec_of_day])
-#            else:
-#                # The good old fashioned formula for slope of a line:
-#                # y = mx + b. Here b is the starting stage, m is change in 
-#                # stage over time interval, and x is the time difference
-#                # between last record of prior day and midnight. y of course is
-#                # the interpolated stage.
-#                prior_rec = first_rec_of_day - 1
-#                b = stage[prior_rec]
-#                m = ((stage[first_rec_of_day] - stage[prior_rec])
-#                     / (date_time[first_rec_of_day] - date_time[prior_rec]))
-#                x = day_start - date_time[prior_rec]  # time interval
-#                stage_this_day.append((m * x) + b)
-    
-    
-    #(rt_stage, rt_discharge) = read_rating_table(rating_table_filename)
     #plot_rating_table(rt_stage, rt_discharge)
 
+    write_revised_records_to_file(date_time_master, stage_master_original,
+                                  stage_master_revised, discharge_master,
+                                  mean_daily_discharge_master,
+                                  'rp_discharge_test.csv')
 
 if __name__ == '__main__':
-    data_file_name = 'rp_rp_time_stage_rt_1953.csv'
+    #data_file_name = 'rp_rp_time_stage_rt_1953.csv'
+    data_file_name = 'for_script_testing.csv'
     data_path = '/Users/gtucker/Data/RioPuerco/RioPuercoWork/riopuerco_historic_data/stage_discharge_processing'
-    run(data_path + '/' + data_file_name)
+    daily_mean_file = 'RPatRP_DailyMeanDischarge.csv'
+    daily_mean_path = '/Users/gtucker/Data/RioPuerco/RioPuerco_ArchivedData/RioPuerco_atRP'
+    rating_table_dir = '/Users/gtucker/Data/RioPuerco/RioPuercoWork/rp_notebooks_and_process_files/1953'
+    run(data_path + '/' + data_file_name,
+        daily_mean_path + '/' + daily_mean_file, rating_table_dir)
     #read_hydrograph_data('/Users/gtucker/Data/RioPuerco/RioPuercoWork/riopuerco_historic_data/stage_discharge_processing/rp_rp_time_stage_rt_1953.csv')
-
