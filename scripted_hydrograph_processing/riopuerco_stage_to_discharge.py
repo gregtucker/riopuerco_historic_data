@@ -9,11 +9,12 @@ riopuerco_stage_to_discharge.py: calculate discharge from stage records.
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import sys
 
 
 dh = 0.005  # stage adjustment increment, feet
 verbose = False
-plot_results = False
+plot_results = True
 
 
 def calc_mean_daily_discharge(t, q):
@@ -210,23 +211,26 @@ def process_one_day_of_stage_records(datetime, gage_height, rt_gage_height,
 
 def write_revised_records_to_file(date_time_master, stage_master_original,
                                   stage_master_revised, discharge_master,
+                                  usgs_mean_daily_discharge,
                                   mean_daily_discharge_master, filename):
-    """Write the 3 quantities to a csv file."""
+    """Write date/time, stage, and discharge to a csv file."""
     with open(filename, 'w') as output_file:
         output_file.write('Date/time,Original gage height (ft),'
                           + 'Adjusted gage height (ft),'
                           + 'Discharge (cfs),'
-                          + 'Calculated mean daily discharge (cfs)')
+                          + 'Reported mean daily discharge (cfs),'
+                          + 'Calculated mean daily discharge (cfs)\n')
         for i in range(len(date_time_master)):
             output_file.write(str(date_time_master[i]) + ','
                               + str(stage_master_original[i]) + ','
                               + str(stage_master_revised[i]) + ','
                               + str(discharge_master[i]) + ','
-                              + str(mean_daily_discharge_master[i]))
+                              + str(usgs_mean_daily_discharge[i]) + ','
+                              + str(mean_daily_discharge_master[i]) + '\n')
     output_file.close()
-    
 
-def run(data_file_name, daily_mean_file_name, rating_table_dir):
+
+def run(data_file_name, daily_mean_file_name, rating_table_dir, out_name):
     """Run the full analysis.
     """
     
@@ -249,6 +253,7 @@ def run(data_file_name, daily_mean_file_name, rating_table_dir):
     stage_master_original = []
     stage_master_revised = []
     discharge_master = []
+    mean_daily_discharge_usgs = []
     mean_daily_discharge_master = []
 
     # If the first record isn't right at midnight, add a record for midnight,
@@ -315,10 +320,6 @@ def run(data_file_name, daily_mean_file_name, rating_table_dir):
                 date_time_this_day.append(this_day + 1.0)  # add midnight
                 stage_this_day.append(stage[current_rec - 1])
                 
-        # TODO:
-        # 2. figure out why the discharge values are all even integers, not
-        # fractional
-                
         # Process this particular day
 
         # Get the name of the rating table file for this day
@@ -347,21 +348,26 @@ def run(data_file_name, daily_mean_file_name, rating_table_dir):
             stage_master_original.append(stage_this_day[i])
             stage_master_revised.append(stage_this_day[i] + best_adj)
             discharge_master.append(q[i])
+            mean_daily_discharge_usgs.append(mean_daily_discharge[int(this_day)])
             mean_daily_discharge_master.append(bqm)
 
         if verbose:
             print('Finished a day:')
             display_days_data(date_time_this_day, stage_this_day, q)
         if plot_results:
+            year = int(date_time_this_day[0] / 365.25)
+            julian_day = np.array(date_time_this_day) - 365.25 * year
+            this_julian_day = this_day - 365.25 * year
             plt.figure(1)
-            plt.plot(date_time_this_day, stage_this_day)
+            plt.plot(julian_day, stage_this_day)
             plt.ylabel('Stage (ft)')
+            plt.xlabel('Julian Day in ' + str(year + 1900))
             plt.figure(2)
-            plt.plot(date_time_this_day, q)
+            plt.plot(julian_day, q)
+            plt.xlabel('Julian Day in ' + str(year + 1900))
             plt.ylabel('Discharge (cfs)')
             mdd = mean_daily_discharge[int(this_day)]
-            plt.plot([this_day, this_day + 1], [mdd, mdd])
-            plt.draw()
+            plt.plot([this_julian_day, this_julian_day + 1], [mdd, mdd])
 
         # Reset for the next
         first_rec_of_day = current_rec
@@ -371,20 +377,27 @@ def run(data_file_name, daily_mean_file_name, rating_table_dir):
             date_time_this_day.append(midnight)
             stage_this_day.append(stage_midnight)
 
-    #plot_rating_table(rt_stage, rt_discharge)
-
     write_revised_records_to_file(date_time_master, stage_master_original,
                                   stage_master_revised, discharge_master,
+                                  mean_daily_discharge_usgs,
                                   mean_daily_discharge_master,
-                                  'rp_discharge_test.csv')
+                                  out_name)
 
 if __name__ == '__main__':
-    #data_file_name = 'rp_rp_time_stage_rt_1953.csv'
-    data_file_name = 'for_script_testing.csv'
-    data_path = '/Users/gtucker/Data/RioPuerco/RioPuercoWork/riopuerco_historic_data/stage_discharge_processing'
-    daily_mean_file = 'RPatRP_DailyMeanDischarge.csv'
-    daily_mean_path = '/Users/gtucker/Data/RioPuerco/RioPuerco_ArchivedData/RioPuerco_atRP'
-    rating_table_dir = '/Users/gtucker/Data/RioPuerco/RioPuercoWork/rp_notebooks_and_process_files/1953'
-    run(data_path + '/' + data_file_name,
-        daily_mean_path + '/' + daily_mean_file, rating_table_dir)
-    #read_hydrograph_data('/Users/gtucker/Data/RioPuerco/RioPuercoWork/riopuerco_historic_data/stage_discharge_processing/rp_rp_time_stage_rt_1953.csv')
+    
+    try:
+        data_path = sys.argv[1]
+        data_file_name = sys.argv[2]
+        daily_mean_path = sys.argv[3]
+        daily_mean_file = sys.argv[4]
+        rating_table_dir = sys.argv[5]
+        output_file_name = sys.argv[6]
+        run(data_path + '/' + data_file_name,
+            daily_mean_path + '/' + daily_mean_file, rating_table_dir,
+            output_file_name)
+        if plot_results:
+            plt.show()
+    except IndexError:
+        print('\nUsage: python ' + sys.argv[0] + ' <data path> <data file name>'
+              + ' <daily mean path> <daily mean name> <rating table path>'
+              + ' <output file name>')
