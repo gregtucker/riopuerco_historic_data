@@ -114,7 +114,7 @@ def read_hydrograph_data(filename):
 
 def read_mean_daily_discharge(filename):
     """Read the USGS-estimated daily mean discharge values from a csv file.
-    
+
     Assumes there is one column with decimal date/time, another with discharge
     or blank for dry.
     """
