@@ -19,9 +19,17 @@ daily_mean = ('../mean_daily_discharge/'
 
 rating_table_dir = '../rating_tables'
 
+plot_path = '../plots/'
+
 # 1944
 rp.run(data_path + 'rio_puerco_at_rio_puerco_date_time_stage_1944.csv',
        daily_mean, rating_table_dir,
-       '../data_files/rio_puerco_at_rio_puerco_stage_discharge1944')
+       '../data_files/rio_puerco_at_rio_puerco_stage_discharge1944.csv',
+       plot_path)
 
+# 1947
+rp.run(data_path + 'rio_puerco_at_rio_puerco_date_time_stage_1947.csv',
+       daily_mean, rating_table_dir,
+       '../data_files/rio_puerco_at_rio_puerco_stage_discharge1947.csv',
+       plot_path)
 

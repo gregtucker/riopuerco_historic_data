@@ -15,6 +15,7 @@ import sys
 dh = 0.005  # stage adjustment increment, feet
 verbose = False
 plot_results = True
+plot_to_file = True
 
 
 def calc_mean_daily_discharge(t, q):
@@ -230,7 +231,8 @@ def write_revised_records_to_file(date_time_master, stage_master_original,
     output_file.close()
 
 
-def run(data_file_name, daily_mean_file_name, rating_table_dir, out_name):
+def run(data_file_name, daily_mean_file_name, rating_table_dir, out_name,
+        plot_path=''):
     """Run the full analysis.
     """
     
@@ -362,12 +364,16 @@ def run(data_file_name, daily_mean_file_name, rating_table_dir, out_name):
             plt.plot(julian_day, stage_this_day)
             plt.ylabel('Stage (ft)')
             plt.xlabel('Julian Day in ' + str(year + 1900))
+            if plot_to_file:
+                plt.savefig(plot_path + 'stage' + str(year + 1900) + '.png')
             plt.figure(2)
             plt.plot(julian_day, q)
             plt.xlabel('Julian Day in ' + str(year + 1900))
             plt.ylabel('Discharge (cfs)')
             mdd = mean_daily_discharge[int(this_day)]
             plt.plot([this_julian_day, this_julian_day + 1], [mdd, mdd])
+            if plot_to_file:
+                plt.savefig(plot_path + 'discharge' + str(year + 1900) + '.png')
 
         # Reset for the next
         first_rec_of_day = current_rec
